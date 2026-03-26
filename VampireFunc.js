@@ -68,9 +68,10 @@ async function startWhatsapp() {
 
         if (reason && (reason >= 500 && reason < 600 || reason === 428 || reason === 408 || reason === 429)) {
             whatsappStatus = false;
-            if (typeof bot !== 'undefined' && chatId && number) {
-                await getSessions(bot, chatId, number);
-            }
+            // Auto-reconnect temporarily disabled
+// if (typeof bot !== 'undefined' && chatId && number) {
+//     await getSessions(bot, chatId, number);
+// }
         } else {
             whatsappStatus = false;
         }
