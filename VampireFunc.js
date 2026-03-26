@@ -1278,8 +1278,11 @@ bot.onText(/\/delbot/, async (msg) => {
   }
 
   try {
-    // Proses logout
-    await logoutWhatsApp(); // Fungsi logout (lu bikin)
+    // Logout: delete creds.json and reset status
+    if (fs.existsSync('./VampirePrivate/creds.json')) {
+      fs.unlinkSync('./VampirePrivate/creds.json');
+    }
+    whatsappStatus = false;
     return bot.sendMessage(chatId, "✅ Nomor Telah Di Logout Dari WhatsApp");
   } catch (error) {
     console.error(error);
