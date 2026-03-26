@@ -50,6 +50,27 @@ setInterval(() => {
 
 let sock;
 let whatsappStatus = false;
+let number = '';
+
+async function getSessions(bot, chatId, numberTarget) {
+  try {
+    await bot.sendMessage(chatId, `⏳ Mencoba menghubungkan sesi WhatsApp untuk nomor ${numberTarget}...`);
+
+    // Clear any existing credentials so a fresh pairing can occur
+    if (fs.existsSync('./VampirePrivate/creds.json')) {
+      fs.unlinkSync('./VampirePrivate/creds.json');
+    }
+
+    // Set the module-level number so startWhatsapp() can use it
+    number = numberTarget;
+
+    // Restart the WhatsApp connection
+    await startWhatsapp();
+  } catch (error) {
+    console.error('getSessions error:', error);
+    await bot.sendMessage(chatId, `❌ Gagal memulai sesi WhatsApp untuk nomor ${numberTarget}: ${error.message}`);
+  }
+}
 
 async function startWhatsapp() {
   const { state, saveCreds } = await useMultiFileAuthState('VampirePrivate');
