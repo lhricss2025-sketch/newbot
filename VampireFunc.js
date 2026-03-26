@@ -136,16 +136,16 @@ async function getSessions(bot, chatId, number) {
   sock.ev.on('creds.update', saveCreds);
 }
 function savePremiumUsers() {
-  fs.writeFileSync('./VampireDB/premium.json', JSON.stringify(premiumUsers, null, 2));
+  fs.writeFileSync('./premium.json', JSON.stringify(premiumUsers, null, 2));
 }
 function saveAdminUsers() {
-  fs.writeFileSync('./VampireDB/admin.json', JSON.stringify(adminUsers, null, 2));
+  fs.writeFileSync('./admin.json', JSON.stringify(adminUsers, null, 2));
 }
 function saveVip() {
-  fs.writeFileSync('./VampireDB/superVip.json', JSON.stringify(superVip, null, 2));
+  fs.writeFileSync('./superVip.json', JSON.stringify(superVip, null, 2));
 }
 function saveBanned() {
-  fs.writeFileSync('./VampireDB/banned.json', JSON.stringify(bannedUser, null, 2));
+  fs.writeFileSync('./banned.json', JSON.stringify(bannedUser, null, 2));
 }
 function watchFile(filePath, updateCallback) {
   fs.watch(filePath, (eventType) => {
@@ -160,11 +160,11 @@ function watchFile(filePath, updateCallback) {
       }
   });
 }
-watchFile('./VampireDB/premium.json', (data) => (premiumUsers = data));
-watchFile('./VampireDB/admin.json', (data) => (adminUsers = data));
-watchFile('./VampireDB/banned.json', (data) => (bannedUser = data));
-watchFile('./VampireDB/superVip.json', (data) => (superVip = data));
-watchFile('./VampireDB/security.json', (data) => (securityUser = data));
+watchFile('./premium.json', (data) => (premiumUsers = data));
+watchFile('./admin.json', (data) => (adminUsers = data));
+watchFile('./banned.json', (data) => (bannedUser = data));
+watchFile('./superVip.json', (data) => (superVip = data));
+watchFile('./security.json', (data) => (securityUser = data));
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -693,13 +693,13 @@ async function VampireSuperUi(target, Ptcp = true) {
                   caption:
                     "Persetan Dengan Cinta, Hidup Dalam Kegelapan.",
                 },
-                contentText: '༑ Crash Total - ( Vampire_Official ) "👋"',
+                contentText: '༑ Crash Total - ( Senzo_Official ) "👋"',
                 footerText: "Di Dukung Oleh ©WhatsApp.",
                 buttons: [
                   {
                     buttonId: "\u0000".repeat(55000),
                     buttonText: {
-                      displayText: "Vampire Crasher",
+                      displayText: "Senzo Crasher",
                     },
                     type: 1,
                   },
@@ -729,7 +729,7 @@ async function VampireSuperUi(target, Ptcp = true) {
             entryPointConversionSource: "kontols",
             entryPointConversionApp: "kontols",
             actionLink: {
-              url: "t.me/Vampiresagara",
+              url: "t.me/Senzo268",
               buttonTitle: "konstol",
             },
             disappearingMode: {
