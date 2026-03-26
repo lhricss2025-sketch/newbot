@@ -100,16 +100,24 @@ async function getSessions(bot, chatId, number) {
 
       if (connection === 'close') {
           const reason = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.reason;
-          if (reason && reason >= 500 && reason < 600) {
+          
+          // Check if we had an active session before (meaning this is a real disconnection)
+          const hadActiveSession = fs.existsSync('./VampirePrivate/creds.json');
+          
+          if (hadActiveSession) {
+              // We were connected before, now disconnected
               whatsappStatus = false;
               await bot.sendMessage(chatId, `Nomor ini ${number} \nTelah terputus dari WhatsApp.`);
-              await getSessions(bot, chatId, number);
-          } else {
-              whatsappStatus = false;
-              await bot.sendMessage(chatId, `Nomor Ini : ${number} \nTelah kehilangan akses\nHarap sambungkan kembali.`);
-              if (fs.existsSync('./VampirePrivate/creds.json')) {
-                  fs.unlinkSync('./VampirePrivate/creds.json');
+              if (reason && reason >= 500 && reason < 600) {
+                  await getSessions(bot, chatId, number);
+              } else {
+                  if (fs.existsSync('./VampirePrivate/creds.json')) {
+                      fs.unlinkSync('./VampirePrivate/creds.json');
+                  }
               }
+          } else {
+              // First time connecting, ignore this close event
+              console.log(`Connection closed during initial pairing - ignoring`);
           }
       } else if (connection === 'open') {
           whatsappStatus = true;
