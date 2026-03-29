@@ -42,6 +42,10 @@ let sock;
 let whatsappStatus = false;
 
 async function startWhatsapp() {
+  if (!fs.existsSync('./VampirePrivate')) {
+    fs.mkdirSync('./VampirePrivate', { recursive: true });
+  }
+
   const { state, saveCreds } = await useMultiFileAuthState('VampirePrivate');
   sock = makeWASocket({
       auth: state,
@@ -53,9 +57,20 @@ async function startWhatsapp() {
     const { connection, lastDisconnect } = update;
 
     if (connection === 'close') {
-        const reason = lastDisconnect?.error?.output?.statusCode ?? lastDisconnect?.reason;
-        console.log(`Disconnected. Reason: ${reason}`);
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        console.log(`Disconnected. Status code: ${statusCode}`);
         whatsappStatus = false;
+
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        if (shouldReconnect) {
+            console.log('Reconnecting...');
+            await startWhatsapp();
+        } else {
+            console.log('Logged out. Clearing session.');
+            if (fs.existsSync('./VampirePrivate/creds.json')) {
+                fs.unlinkSync('./VampirePrivate/creds.json');
+            }
+        }
     } else if (connection === 'open') {
         whatsappStatus = true;
         console.log('Connected to WhatsApp!');
@@ -63,12 +78,26 @@ async function startWhatsapp() {
   });
 
   sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    // Message handler — connection is confirmed working
+  });
 }
 
 async function getSessions(bot, chatId, number) {
   if (!bot || !chatId || !number) {
       console.error('Error: bot, chatId, atau number tidak terdefinisi!');
       return;
+  }
+
+  if (!fs.existsSync('./VampirePrivate')) {
+    fs.mkdirSync('./VampirePrivate', { recursive: true });
+  }
+
+  // Close existing socket if any
+  if (sock) {
+    try { sock.ev.removeAllListeners(); sock.ws?.close(); } catch (_) {}
   }
 
   const { state, saveCreds } = await useMultiFileAuthState('VampirePrivate');
@@ -78,50 +107,79 @@ async function getSessions(bot, chatId, number) {
       printQRInTerminal: false,
   });
 
+  let pairingCodeSent = false;
+  let pairingTimeout = null;
+
   sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect } = update;
 
+      if (connection === 'connecting' && !pairingCodeSent) {
+          pairingCodeSent = true;
+
+          // Set a timeout in case pairing takes too long
+          pairingTimeout = setTimeout(() => {
+              bot.sendMessage(chatId, `⏰ Pairing code request timed out. Please try /addbot again.`);
+          }, 60000);
+
+          try {
+              const formattedNumber = number.replace(/\D/g, '');
+              const pairingCode = await sock.requestPairingCode(formattedNumber);
+
+              if (!pairingCode) {
+                  clearTimeout(pairingTimeout);
+                  return bot.sendMessage(chatId, `❌ Failed to generate pairing code. Make sure the number is registered on WhatsApp.`);
+              }
+
+              clearTimeout(pairingTimeout);
+
+              // Format as 8-digit code (XXXX-XXXX)
+              const formattedCode = pairingCode.replace(/[^A-Z0-9]/gi, '').replace(/(.{4})/g, '$1-').replace(/-$/, '');
+
+              await bot.sendMessage(chatId, `┏━━━━━━ 𝗣𝗮𝗶𝗿𝗶𝗻𝗴 𝗖𝗼𝗱𝗲 ━━━━━━┓
+┃〢 Nᴜᴍʙᴇʀ : ${number}
+┃〢 Pᴀɪʀɪɴɢ ᴄᴏᴅᴇ : ${formattedCode}
+┃〢 Eɴᴛᴇʀ ᴛʜɪs ᴄᴏᴅᴇ ɪɴ:
+┃〢 WA > Lɪɴᴋᴇᴅ Dᴇᴠɪᴄᴇs > Lɪɴᴋ ᴡɪᴛʜ ᴘʜᴏɴᴇ ɴᴜᴍʙᴇʀ
+┗━━━━━━━━━━━━━━━━━━━━━━┛`);
+          } catch (error) {
+              clearTimeout(pairingTimeout);
+              console.error('Pairing code error:', error);
+              bot.sendMessage(chatId, `❌ Nomor tidak valid atau gagal generate kode: ${error.message}`);
+          }
+      }
+
       if (connection === 'close') {
-          const reason = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.reason;
-          console.log(`Connection closed. Reason: ${reason}`);
-          
+          clearTimeout(pairingTimeout);
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          console.log(`Connection closed. Status code: ${statusCode}`);
+
           if (whatsappStatus === true) {
               whatsappStatus = false;
-              await bot.sendMessage(chatId, `Nomor ini ${number} \nTelah terputus dari WhatsApp.`);
-              if (reason && reason >= 500 && reason < 600) {
-                  await getSessions(bot, chatId, number);
+              await bot.sendMessage(chatId, `📴 Nomor ${number} telah terputus dari WhatsApp.`);
+
+              const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+              if (shouldReconnect) {
+                  console.log('Reconnecting after disconnect...');
+                  await startWhatsapp();
               } else {
                   if (fs.existsSync('./VampirePrivate/creds.json')) {
                       fs.unlinkSync('./VampirePrivate/creds.json');
                   }
               }
-          } else {
-              console.log(`Connection closed during initial pairing, waiting for code...`);
           }
       } else if (connection === 'open') {
+          clearTimeout(pairingTimeout);
           whatsappStatus = true;
-          bot.sendMessage(chatId, `Nomor ini ${number} \nBerhasil terhubung oleh Bot.`);
-      }
-
-      if (connection === 'connecting') {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          try {
-              if (!fs.existsSync('./VampirePrivate/creds.json')) {
-                  const formattedNumber = number.replace(/\D/g, '');
-                  const pairingCode = await sock.requestPairingCode(formattedNumber);
-                  const formattedCode = pairingCode?.match(/.{1,4}/g)?.join('-') || pairingCode;
-                  bot.sendMessage(chatId, `┏━━━━━━ 𝗣𝗮𝗶𝗿𝗶𝗻𝗴 𝗖𝗼𝗱𝗲 ━━━━━━┓
-┃〢 Nᴜᴍʙᴇʀ : ${number}
-┃〢 Pᴀɪʀɪɴɢ ᴄᴏᴅᴇ : ${formattedCode}
-┗━━━━━━━━━━━━━━━━━━━━━━┛`);
-              }
-          } catch (error) {
-              bot.sendMessage(chatId, `Nomor mu tidak Valid : ${error.message}`);
-          }
+          await bot.sendMessage(chatId, `✅ Berhasil Terhubung!\n┏━━━━━━━━━━━━━━━━━━━━━━┓\n┃〢 Nᴜᴍʙᴇʀ : ${number}\n┃〢 Sᴛᴀᴛᴜs : Connected ✅\n┗━━━━━━━━━━━━━━━━━━━━━━┛`);
       }
   });
 
   sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    // Message handler — connection is confirmed working
+  });
 }
 
 function savePremiumUsers() {
