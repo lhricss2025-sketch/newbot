@@ -8,6 +8,7 @@ const global = require('./VampireConfig.js');
 const Boom = require('@hapi/boom');
 const TelegramBot = require('node-telegram-bot-api');
 const bot = new TelegramBot(global.botToken, { polling: true });
+
 bot.on('polling_error', (err) => {
   if (err.code === 'ETELEGRAM' && err.message && err.message.includes('409')) {
     console.error('Polling conflict: another bot instance is already running. Stopping this instance.');
@@ -15,6 +16,7 @@ bot.on('polling_error', (err) => {
   }
   console.error('Telegram polling error:', err.message);
 });
+
 let superVip = JSON.parse(fs.readFileSync('./superVip.json'));
 let premiumUsers = JSON.parse(fs.readFileSync('./premium.json'));
 let adminUsers = JSON.parse(fs.readFileSync('./admin.json'));
@@ -52,6 +54,7 @@ let pairingChatId = null;
 let pairingNumber = null;
 let pairingBot = null;
 
+// --- UPDATED SOCKET CREATION ---
 function createSocket(state, saveCreds) {
   if (sock) {
     try { sock.ev.removeAllListeners(); sock.ws?.close(); } catch (_) {}
@@ -60,10 +63,12 @@ function createSocket(state, saveCreds) {
 
   sock = makeWASocket({
     auth: state,
-    logger: P({ level: 'silent' }),
+    logger: P({ level: 'silent' }), // Keep silent to avoid console spam
     printQRInTerminal: false,
-    // FIX: Set Browser to standard Chrome to prevent WhatsApp API from rejecting the pairing code
-    browser:['Ubuntu', 'Chrome', '20.0.04'], 
+    // Using macOS browser signature is currently the most stable for bypassing WA blocks
+    browser: Browsers.macOS('Desktop'),
+    syncFullHistory: false, // Prevents memory crash during pairing
+    generateHighQualityLinkPreview: true
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -89,15 +94,8 @@ function createSocket(state, saveCreds) {
       console.log(`Disconnected. Status code: ${statusCode}`);
       whatsappStatus = false;
 
-      if (isPairing) {
-        // Don't reconnect during pairing — wait for user to enter the code
-        console.log('Connection closed during pairing. Waiting for user input.');
-        return;
-      }
-
       if (statusCode === DisconnectReason.loggedOut) {
         console.log('Logged out. Clearing session.');
-        // FIX: Remove the entire folder to avoid leaving broken pre-keys behind
         if (fs.existsSync('./VampirePrivate')) {
           fs.rmSync('./VampirePrivate', { recursive: true, force: true });
         }
@@ -106,32 +104,31 @@ function createSocket(state, saveCreds) {
           pairingBot = null; pairingChatId = null; pairingNumber = null;
         }
       } else {
-        console.log('Reconnecting...');
-        setTimeout(async () => {
-          try {
-            const { state: newState, saveCreds: newSaveCreds } = await useMultiFileAuthState('VampirePrivate');
-            createSocket(newState, newSaveCreds);
-          } catch (err) {
-            console.error('Reconnect error:', err.message);
-          }
-        }, 3000);
+        // Only reconnect if not actively trying to pair
+        if (!isPairing) {
+            console.log('Reconnecting...');
+            setTimeout(async () => {
+            try {
+                const { state: newState, saveCreds: newSaveCreds } = await useMultiFileAuthState('VampirePrivate');
+                createSocket(newState, newSaveCreds);
+            } catch (err) {
+                console.error('Reconnect error:', err.message);
+            }
+            }, 3000);
+        }
       }
     }
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
-    // Message handler — connection is confirmed working
   });
 
   return sock;
 }
 
+// --- UPDATED START WHATSAPP ---
 async function startWhatsapp() {
-  // FIX: Catch previously orphaned broken keys and clear them automatically on startup
-  if (fs.existsSync('./VampirePrivate') && !fs.existsSync('./VampirePrivate/creds.json')) {
-    fs.rmSync('./VampirePrivate', { recursive: true, force: true });
-  }
   if (!fs.existsSync('./VampirePrivate')) {
     fs.mkdirSync('./VampirePrivate', { recursive: true });
   }
@@ -139,81 +136,64 @@ async function startWhatsapp() {
   createSocket(state, saveCreds);
 }
 
+// --- UPDATED GET SESSIONS (PAIRING) ---
 async function getSessions(botInstance, chatId, number) {
-  if (!botInstance || !chatId || !number) {
-    console.error('Error: bot, chatId, atau number tidak terdefinisi!');
-    return;
-  }
+  if (!botInstance || !chatId || !number) return;
 
-  // If already authenticated, no need to pair again
-  if (whatsappStatus) {
-    return botInstance.sendMessage(chatId, `✅ WhatsApp sudah terhubung untuk nomor ${number}.`);
-  }
+  const formattedNumber = number.replace(/\D/g, '');
 
-  if (isPairing) {
-    return botInstance.sendMessage(chatId, `⏳ Sedang dalam proses pairing. Harap tunggu atau coba lagi nanti.`);
+  // 1. OBLITERATE EXISTING SESSION TO ENSURE FRESH PAIRING
+  // This guarantees there are no corrupted keys blocking the new pairing code
+  if (fs.existsSync('./VampirePrivate')) {
+    fs.rmSync('./VampirePrivate', { recursive: true, force: true });
   }
+  fs.mkdirSync('./VampirePrivate', { recursive: true });
 
   isPairing = true;
   pairingBot = botInstance;
   pairingChatId = chatId;
-  pairingNumber = number;
+  pairingNumber = formattedNumber;
 
-  try {
-    // FIX: Catch orphaned broken keys if user's session folder got corrupted
-    if (fs.existsSync('./VampirePrivate') && !fs.existsSync('./VampirePrivate/creds.json')) {
-      fs.rmSync('./VampirePrivate', { recursive: true, force: true });
-    }
-    if (!fs.existsSync('./VampirePrivate')) {
-      fs.mkdirSync('./VampirePrivate', { recursive: true });
-    }
+  botInstance.sendMessage(chatId, `⏳ Memulai sesi baru dan menghubungi server WhatsApp...`);
 
-    // Destroy existing socket and create a fresh one
-    const { state, saveCreds } = await useMultiFileAuthState('VampirePrivate');
-    createSocket(state, saveCreds);
+  const { state, saveCreds } = await useMultiFileAuthState('VampirePrivate');
+  createSocket(state, saveCreds);
 
-    // Wait for the socket to reach 'connecting' state before requesting pairing code
-    await new Promise((resolve) => {
-      const onUpdate = (update) => {
-        if (update.connection === 'connecting' || update.connection === 'open') {
-          sock.ev.off('connection.update', onUpdate);
-          resolve();
-        }
-      };
-      sock.ev.on('connection.update', onUpdate);
-      // Safety timeout — proceed after 5 s even if no event fires
-      setTimeout(() => { sock.ev.off('connection.update', onUpdate); resolve(); }, 5000);
-    });
+  // 2. WAIT FOR INITIALIZATION THEN REQUEST
+  // We MUST wait 4 seconds for the socket to properly connect to WA servers before asking for a code
+  setTimeout(async () => {
+    try {
+      if (!sock.authState.creds.registered) {
+        const pairingCode = await sock.requestPairingCode(formattedNumber);
+        
+        // Format as XXXX-XXXX safely
+        const formattedCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
 
-    // FIX: Give the socket an extra moment to fully stabilise (increased slightly to 3000ms)
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    if (whatsappStatus) {
-      // Already connected (creds existed) — no pairing needed
+        await botInstance.sendMessage(
+          chatId,
+          `┏━━━━━━ 𝗣𝗮𝗶𝗿𝗶𝗻𝗴 𝗖𝗼𝗱𝗲 ━━━━━━┓\n┃〢 Nᴜᴍʙᴇʀ : ${formattedNumber}\n┃〢 Pᴀɪʀɪɴɢ ᴄᴏᴅᴇ : ${formattedCode}\n┃〢 Eɴᴛᴇʀ ᴛʜɪs ᴄᴏᴅᴇ ɪɴ:\n┃〢 WA > Lɪɴᴋᴇᴅ Dᴇᴠɪᴄᴇs > Lɪɴᴋ ᴡɪᴛʜ ᴘʜᴏɴᴇ ɴᴜᴍʙᴇʀ\n┗━━━━━━━━━━━━━━━━━━━━━━┛`
+        );
+      } else {
+         isPairing = false;
+         botInstance.sendMessage(chatId, `✅ Nomor ${formattedNumber} sudah terhubung.`);
+      }
+    } catch (error) {
       isPairing = false;
-      return botInstance.sendMessage(chatId, `✅ WhatsApp sudah terhubung untuk nomor ${number}.`);
+      console.error('Pairing code error:', error);
+      
+      // Provide readable errors so you know EXACTLY why WhatsApp rejected it
+      let errorMsg = error.message;
+      if(errorMsg.includes('rate-overlimit') || errorMsg.includes('429')) {
+         errorMsg = "⚠️ Terkena Limit WhatsApp (Terlalu banyak mencoba). Harap tunggu 1-2 jam sebelum mencoba lagi.";
+      } else if(errorMsg.includes('Connection Closed')) {
+         errorMsg = "⚠️ Koneksi terputus oleh WhatsApp. Coba lagi dalam beberapa menit.";
+      } else if(errorMsg.includes('401')) {
+         errorMsg = "⚠️ Nomor tidak valid atau dilarang oleh WhatsApp.";
+      }
+      
+      botInstance.sendMessage(chatId, `❌ Gagal mendapatkan kode dari WhatsApp.\n\nAlasan: ${errorMsg}`);
     }
-
-    const formattedNumber = number.replace(/\D/g, '');
-    const pairingCode = await sock.requestPairingCode(formattedNumber);
-
-    if (!pairingCode) {
-      isPairing = false;
-      return botInstance.sendMessage(chatId, `❌ Failed to generate pairing code. Make sure the number is registered on WhatsApp.`);
-    }
-
-    // Format as XXXX-XXXX
-    const formattedCode = pairingCode.replace(/[^A-Z0-9]/gi, '').replace(/(.{4})/g, '$1-').replace(/-$/, '');
-
-    await botInstance.sendMessage(
-      chatId,
-      `┏━━━━━━ 𝗣𝗮𝗶𝗿𝗶𝗻𝗴 𝗖𝗼𝗱𝗲 ━━━━━━┓\n┃〢 Nᴜᴍʙᴇʀ : ${number}\n┃〢 Pᴀɪʀɪɴɢ ᴄᴏᴅᴇ : ${formattedCode}\n┃〢 Eɴᴛᴇʀ ᴛʜɪs ᴄᴏᴅᴇ ɪɴ:\n┃〢 WA > Lɪɴᴋᴇᴅ Dᴇᴠɪᴄᴇs > Lɪɴᴋ ᴡɪᴛʜ ᴘʜᴏɴᴇ ɴᴜᴍʙᴇʀ\n┗━━━━━━━━━━━━━━━━━━━━━━┛`
-    );
-  } catch (error) {
-    isPairing = false;
-    console.error('Pairing code error:', error);
-    botInstance.sendMessage(chatId, `❌ Nomor tidak valid atau gagal generate kode: ${error.message}`);
-  }
+  }, 4000); // 4000ms delay ensures the WebSocket is fully ready
 }
 
 function savePremiumUsers() {
@@ -1398,13 +1378,11 @@ bot.onText(/\/delbot/, async (msg) => {
   }
 
   try {
-    // FIX: Remove entire folder instead of just creds.json to wipe leftover keys
     if (fs.existsSync('./VampirePrivate')) {
       fs.rmSync('./VampirePrivate', { recursive: true, force: true });
     }
     whatsappStatus = false;
     
-    // FIX: Properly close background socket to prevent ghost connection attempts
     if (sock) {
       try { sock.ev.removeAllListeners(); sock.ws?.close(); } catch (_) {}
       sock = null;
@@ -1552,7 +1530,7 @@ bot.on("callback_query", async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const senderId = callbackQuery.from.id;
     const senderName = callbackQuery.from.username ? `@${callbackQuery.from.username}` : `${senderId}`;
-    const [action, formatedNumber] = callbackQuery.data.split(":");
+    const[action, formatedNumber] = callbackQuery.data.split(":");
 
     try {
         if (action === "ownermenu") {
